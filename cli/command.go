@@ -19,7 +19,7 @@ var (
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			be = backend.NewBackend(config.Backend())
-			if err := be.Install("ubuntu.x86"); err != nil {
+			if err := be.Install(args[0]); err != nil {
 				println("failed to install")
 			}
 		},
@@ -37,7 +37,7 @@ var (
 
 	buildServerCmd = &cobra.Command{
 		Use:   "server",
-		Short: "create server interface",
+		Short: "create a new server interface",
 		Run: func(cmd *cobra.Command, args []string) {
 			be = backend.NewBackend(config.Backend())
 			if err := be.Server(map[string]string{}); err != nil {
@@ -48,7 +48,7 @@ var (
 
 	buildClientCmd = &cobra.Command{
 		Use:   "client",
-		Short: "create client interface",
+		Short: "create a new client interface",
 		Run: func(cmd *cobra.Command, args []string) {
 			be = backend.NewBackend(config.Backend())
 			if err := be.Client(map[string]string{}); err != nil {
@@ -59,10 +59,25 @@ var (
 
 	addCmd = &cobra.Command{
 		Use:   "add",
-		Short: "add node on server side",
+		Short: "add a new node to server interface",
 		Run: func(cmd *cobra.Command, args []string) {
 			be = backend.NewBackend(config.Backend())
 			if err := be.AddNode(map[string]string{}); err != nil {
+				panic(err)
+			}
+		},
+	}
+
+	delCmd = &cobra.Command{
+		Use:   "del",
+		Short: "delete a node from server interface",
+		Args:  cobra.MinimumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			be = backend.NewBackend(config.Backend())
+			filter := map[string]string{
+				"hash": args[0],
+			}
+			if err := be.DelNode(filter); err != nil {
 				panic(err)
 			}
 		},
@@ -74,6 +89,21 @@ var (
 		Run: func(cmd *cobra.Command, args []string) {
 			be = backend.NewBackend(config.Backend())
 			if err := be.Connect(map[string]string{}); err != nil {
+				panic(err)
+			}
+		},
+	}
+
+	disconnCmd = &cobra.Command{
+		Use:   "disconnect",
+		Short: "disconnect from server",
+		Args:  cobra.MinimumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			be = backend.NewBackend(config.Backend())
+			filter := map[string]string{
+				"hash": args[0],
+			}
+			if err := be.Disconnect(filter); err != nil {
 				panic(err)
 			}
 		},
@@ -107,6 +137,8 @@ func SetupTricarb(cmd * cobra.Command) {
 	buildCmd.AddCommand(buildClientCmd)
 	cmd.AddCommand(buildCmd)
 	cmd.AddCommand(addCmd)
+	cmd.AddCommand(delCmd)
 	cmd.AddCommand(connCmd)
+	cmd.AddCommand(disconnCmd)
 	cmd.AddCommand(versionCmd)
 }

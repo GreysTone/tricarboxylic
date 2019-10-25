@@ -2,18 +2,42 @@ package backend
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"path"
 	"strconv"
 	"strings"
 
+	"github.com/mitchellh/mapstructure"
+
+	"github.com/GreysTone/tricarboxylic/config"
 	"github.com/GreysTone/tricarboxylic/utils"
 )
 
-type WireGuard struct {
+type KeyPair struct {
 	privateKey []byte
 	publicKey  []byte
+}
+
+type Interface struct {
+	ListenPort string
+	Address    string
+	PrivateKey string
+	LocalEth   string
+}
+
+type Peer struct {
+	PublicKey  string
+	AllowedIps string
+	EndPointIp   string
+	EndPointPort string
+}
+
+type WireGuard struct {
+	kp       KeyPair
+	IfaceSec Interface
+	PeersSec []Peer
 }
 
 const (
@@ -21,27 +45,18 @@ const (
 	defaultNetworkCIDR = "10.0.0.1/24"
 	defualtNetworkInterface = "eth0"
 
-	configServerInterface = `[Interface]
-ListenPort = RWTH_PORT
-Address = RWTH_CIDR
-PrivateKey = RWTH_PRV_KEY
-PostUp   = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o RWTH_ETH -j MASQUERADE
-PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o RWTH_ETH -j MASQUERADE
+	configServerInterface = `ListenPort = RWTH_PORT
 `
-	configServerPeer = `[Peer]
-PublicKey = RWTH_CLIENT_PUB_KEY
+	configServerPeer = `PublicKey = RWTH_PUB_KEY
 AllowedIPs = RWTH_CIDR
 `
-	configClientInterface = `[Interface]
-Address = RWTH_CIDR
+	configClientInterface = `Address = RWTH_CIDR
 PrivateKey = RWTH_PRV_KEY
 PostUp   = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o RWTH_ETH -j MASQUERADE
 PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o RWTH_ETH -j MASQUERADE
+
 `
-	configClientPeer = `[Peer]
-PublicKey = RWTH_SERVER_PUB_KEY
-AllowedIPs =  RWTH_CIDR
-Endpoint = RWTH_SERVER_IP:RWTH_PORT
+	configClientPeer = `Endpoint = RWTH_SERVER_IP:RWTH_PORT
 PersistentKeepalive = 10
 `
 )
@@ -79,247 +94,192 @@ func (v *WireGuard) Uninstall() error {
 }
 
 func (v *WireGuard) Server(config map[string]string) error {
-	if err := v.newKeyPair(); err != nil {
-		return err
+	var newConfig = map[string]string{}
+
+	if input, err := utils.InputAndCheck("Wireguard Server listen on port:",
+		defaultListenPort, portValidator); err != nil {
+			return err
+	} else {
+		newConfig["ListenPort"] = input
 	}
 
-	var replacer = map[string]string{}
-	var input string
-
-	// port
-	input, err := utils.InputAndCheck(
-		"Wireguard Server listen on port:",
-		defaultListenPort,
-		portValidator)
-	replacer["RWTH_PORT"] = input
-	if err != nil {
-		return err
+	if input, err := utils.InputAndCheck("Wireguard Server CIDR:",
+		defaultNetworkCIDR, passingByValidator); err != nil {
+			return err
+	} else {
+		newConfig["Address"] = input
 	}
 
-	// cidr
-	input, err = utils.InputAndCheck(
-		"Wireguard Server CIDR:",
-		defaultNetworkCIDR,
-		passingByValidator)
-	replacer["RWTH_CIDR"] = input
-	if err != nil {
-		return err
-	}
-
-	// private key
-	replacer["RWTH_PRV_KEY"] = string(v.privateKey)
-
-	// network interface
 	fmt.Println("Listing all network interfaces:")
 	if err := utils.StdIOCmd("ifconfig", "-a", "-s"); err != nil {
 		fmt.Println("Failed to list network interfaces")
 	}
-	input, err = utils.InputAndCheck(
-		"Output Nework Interface: (eg. eth0):",
-		defualtNetworkInterface,
-		passingByValidator)
-	replacer["RWTH_ETH"] = input
-	if err != nil {
+	if input, err := utils.InputAndCheck("Output Nework Interface: (eg. eth0):",
+		defualtNetworkInterface, passingByValidator); err != nil {
+			return err
+	} else {
+		newConfig["LocalEth"] = input
+	}
+
+	if err := v.newInterface(newConfig); err != nil {
 		return err
 	}
 
-	ifaceText, err := utils.MakeText(configServerInterface, replacer)
-	if err != nil {
+	if err := v.dumpConfig(path.Join("wg0.conf")); err != nil {
 		return err
 	}
 
-	targetFile := path.Join("wg0.conf")
-	if _, err := os.Stat(targetFile); os.IsExist(err) {
-		fmt.Println("Found wg0.conf exists, will overwrite")
-		if err := os.Remove(targetFile); err != nil {
-			panic(err)
-		}
-	}
-
-	f, err := os.OpenFile(targetFile, os.O_CREATE|os.O_WRONLY, 0600)
-	defer f.Close()
-	if err != nil {
-		panic(err)
-	}
-	if _, err := f.WriteString(ifaceText); err != nil {
-		return err
-	}
-
-	fmt.Println("Successfully dump WireGuard Interface section")
-
-	return v.upIface("./wg0.conf")
+	fmt.Println("Successfully dump WireGuard server interface")
+	return nil
 }
 
 func (v *WireGuard) AddNode(config map[string]string) error {
-	var replacer = map[string]string{}
-	var input string
+	var newConfig = map[string]string{}
 
-	// public key
-	input, err := utils.InputAndCheck(
-		"Wireguard Peer public key:",
-		"",
-		passingByValidator)
-	replacer["RWTH_CLIENT_PUB_KEY"] = input
-	if err != nil {
+	if input, err := utils.InputAndCheck("Wireguard Peer public key:",
+		"", passingByValidator); err != nil {
+			return  err
+	} else {
+		newConfig["PublicKey"] = input
+	}
+
+	if input, err := utils.InputAndCheck("Peer allowed CIDR:",
+		"", passingByValidator); err != nil {
+			return err
+	} else {
+		newConfig["AllowedIPs"] = input
+	}
+
+	if err := v.addPeer(newConfig); err != nil {
 		return err
 	}
 
-	input, err = utils.InputAndCheck(
-		"Peer allowed CIDR:",
-		"",
-		passingByValidator)
-	replacer["RWTH_CIDR"] = input
-	if err != nil {
+	if err := v.dumpConfig(path.Join("wg0.conf")); err != nil {
 		return err
 	}
 
-	targetFile := path.Join("wg0.conf")
-	peerText, err := utils.MakeText(configServerPeer, replacer)
-
-	f, err := os.OpenFile(targetFile, os.O_APPEND|os.O_WRONLY, 0600)
-	defer f.Close()
-	if err != nil {
-		panic(err)
+	if err := v.restartIface("./wg0.conf"); err != nil {
+		return err
 	}
-	if _, err := f.WriteString(peerText); err != nil {
+	fmt.Println("Successfully add a new peer")
+	return nil
+}
+
+func (v *WireGuard) DelNode(config map[string]string) error {
+	if err := v.delPeer(config["hash"]); err != nil {
 		return err
 	}
 
-	fmt.Println("Successfully add new WireGuard Peer section")
+	if err := v.dumpConfig(path.Join("wg0.conf")); err != nil {
+		return err
+	}
 
-	return v.restartIface("./wg0.conf")
+	if err := v.restartIface("./wg0.conf"); err != nil {
+		return err
+	}
+	fmt.Println("Successfully delete a peer")
+	return nil
 }
 
 func (v *WireGuard) Client(config map[string]string) error {
-	if err := v.newKeyPair(); err != nil {
-		return err
-	}
-	var replacer = map[string]string{}
-	var input string
+	var newConfig = map[string]string{}
 
-	// cidr
-	input, err := utils.InputAndCheck(
-		"Wireguard Client CIDR:",
-		defaultNetworkCIDR,
-		passingByValidator)
-	replacer["RWTH_CIDR"] = input
-	if err != nil {
+	if input, err := utils.InputAndCheck("Wireguard Client CIDR:",
+		defaultNetworkCIDR, passingByValidator); err != nil {
 		return err
+	} else {
+		newConfig["Address"] = input
 	}
 
-	// private key
-	replacer["RWTH_PRV_KEY"] = string(v.privateKey)
-
-	// network interface
 	fmt.Println("Listing all network interfaces:")
 	if err := utils.StdIOCmd("ifconfig", "-a", "-s"); err != nil {
 		return err
 	}
-	input, err = utils.InputAndCheck(
-		"Output Nework Interface: (eg. eth0):",
-		defualtNetworkInterface,
-		passingByValidator)
-	replacer["RWTH_ETH"] = input
-	if err != nil {
+	if input, err := utils.InputAndCheck("Output Nework Interface: (eg. eth0):",
+		defualtNetworkInterface, passingByValidator); err != nil {
+			return nil
+	} else {
+		newConfig["LocalEth"] = input
+	}
+
+	if err := v.newInterface(newConfig); err != nil {
 		return err
 	}
 
-	ifaceText, err := utils.MakeText(configClientInterface, replacer)
-	if err != nil {
+	if err := v.dumpConfig(path.Join("wg0.conf")); err != nil {
 		return err
 	}
 
-	targetFile := path.Join("wg0.conf")
-	if _, err := os.Stat(targetFile); os.IsExist(err) {
-		fmt.Println("Found wg0.conf exists, will overwrite")
-		if err := os.Remove(targetFile); err != nil {
-			panic(err)
-		}
-	}
-
-	f, err := os.OpenFile(targetFile, os.O_CREATE|os.O_WRONLY, 0600)
-	defer f.Close()
-	if err != nil {
-		panic(err)
-	}
-	if _, err := f.WriteString(ifaceText); err != nil {
-		return err
-	}
-
-	fmt.Println("Successfully dump WireGuard Interface section")
-
+	fmt.Println("Successfully dump WireGuard client interface")
 	return nil
 }
 
 func (v *WireGuard) Connect(config map[string]string) error {
-	var replacer = map[string]string{}
-	var input string
+	var newConfig = map[string]string{}
 
-	// ip address
-	input, err := utils.InputAndCheck(
-		"Wireguard Server serving on ip:",
-		"",
-		passingByValidator)
-	replacer["RWTH_SERVER_IP"] = input
-	if err != nil {
+	if input, err := utils.InputAndCheck("Wireguard Server serving on ip:",
+		"", passingByValidator); err != nil {
+			return err
+	} else {
+		newConfig["EndPointIp"] = input
+	}
+
+	if input, err := utils.InputAndCheck("Wireguard Server serving on port:",
+		defaultListenPort, portValidator); err != nil {
+		return err
+	} else {
+		newConfig["EndPointPort"] = input
+	}
+
+	if input, err := utils.InputAndCheck("Wireguard Peer public key:",
+		"", passingByValidator); err != nil {
+			return err
+	} else {
+		newConfig["PublicKey"] = input
+	}
+
+	if input, err := utils.InputAndCheck("Peer allowed CIDR:",
+		"", passingByValidator); err != nil {
+			return err
+	} else {
+		newConfig["AllowedIPs"] = input
+	}
+
+	if err := v.addPeer(newConfig); err != nil {
 		return err
 	}
 
-	// port
-	input, err = utils.InputAndCheck(
-		"Wireguard Server serving on port:",
-		defaultListenPort,
-		portValidator)
-	replacer["RWTH_PORT"] = input
-	if err != nil {
+	if err := v.dumpConfig(path.Join("wg0.conf")); err != nil {
 		return err
 	}
 
-	// public key
-	input, err = utils.InputAndCheck(
-		"Wireguard Peer public key:",
-		"",
-		passingByValidator)
-	replacer["RWTH_SERVER_PUB_KEY"] = input
-	if err != nil {
+	if err := v.upIface("./wg0.conf"); err != nil {
+		return err
+	}
+	fmt.Println("Successfully connect to server")
+	return nil
+
+}
+
+func (v *WireGuard) Disconnect(config map[string]string) error {
+	if err := v.delPeer(config["hash"]); err != nil {
 		return err
 	}
 
-	input, err = utils.InputAndCheck(
-		"Peer allowed CIDR:",
-		"",
-		passingByValidator)
-	replacer["RWTH_CIDR"] = input
-	if err != nil {
+	if err := v.dumpConfig(path.Join("wg0.conf")); err != nil {
 		return err
 	}
 
-	targetFile := path.Join("wg0.conf")
-	peerText, err := utils.MakeText(configClientPeer, replacer)
-
-	f, err := os.OpenFile(targetFile, os.O_APPEND|os.O_WRONLY, 0600)
-	defer f.Close()
-	if err != nil {
-		panic(err)
-	}
-	if _, err := f.WriteString(peerText); err != nil {
+	if err := v.restartIface("./wg0.conf"); err != nil {
 		return err
 	}
-
-	fmt.Println("Successfully add new WireGuard Server section")
-
-	return v.upIface("./wg0.conf")
-
+	fmt.Println("Successfully disconnect from server")
+	return nil
 }
 
 func (v *WireGuard) preflight() error {
 	inspectCmd := exec.Command("wg show")
 	inspectCmd.Stderr = os.Stderr
-	if err := inspectCmd.Run(); err != nil {
-		return err
-	}
-
-	inspectCmd = exec.Command("tee", "--help")
 	if err := inspectCmd.Run(); err != nil {
 		return err
 	}
@@ -337,25 +297,6 @@ func (v *WireGuard) preflight() error {
 	return nil
 }
 
-func (v *WireGuard) newKeyPair() error {
-	privateKey, err := exec.Command("wg", "genkey").Output()
-	if err != nil {
-		return err
-	}
-	v.privateKey = privateKey
-
-	pubCmd := exec.Command("wg", "pubkey")
-	pubCmd.Stdin = strings.NewReader(string(v.privateKey))
-	v.publicKey, err = pubCmd.Output()
-	if err != nil {
-		return err
-	}
-
-	fmt.Println("PrivateKey:", string(v.privateKey))
-	fmt.Println("PublicKey:", string(v.publicKey))
-	return nil
-}
-
 func (v *WireGuard) upIface(i string) error {
 	return utils.StdIOCmd("wg-quick", "up", i)
 }
@@ -369,4 +310,179 @@ func (v *WireGuard) restartIface(i string) error {
 		return err
 	}
 	return v.upIface(i)
+}
+
+func (v *WireGuard) newKeyPair() error {
+	privateKey, err := exec.Command("wg", "genkey").Output()
+	if err != nil {
+		return err
+	}
+	v.kp.privateKey = privateKey
+
+	pubCmd := exec.Command("wg", "pubkey")
+	pubCmd.Stdin = strings.NewReader(string(v.kp.privateKey))
+	v.kp.publicKey, err = pubCmd.Output()
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("PublicKey:", string(v.kp.publicKey))
+	return nil
+}
+
+func (v *WireGuard) newInterface(config map[string]string) error {
+	if err := v.loadConfig(); err != nil {
+		return err
+	}
+
+	if err := v.newKeyPair(); err != nil {
+		return err
+	}
+
+	var newInterface = Interface{
+		ListenPort: config["ListenPort"],
+		Address:    config["Address"],
+		PrivateKey: strings.TrimSpace(string(v.kp.privateKey)),
+		LocalEth:   config["LocalEth"],
+	}
+	v.IfaceSec = newInterface
+
+	if err := v.saveConfig(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (v *WireGuard) addPeer(config map[string]string) error {
+	if err := v.loadConfig(); err != nil {
+		return err
+	}
+
+	var newPeer = Peer{
+		PublicKey:           config["PublicKey"],
+		AllowedIps:          config["AllowedIPs"],
+	}
+	if config["EndPointIp"] != "" {
+		newPeer.EndPointIp = config["EndPointIp"]
+		newPeer.EndPointPort = config["EndPointPort"]
+	}
+	v.PeersSec = append(v.PeersSec, newPeer)
+
+	if err := v.saveConfig(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (v *WireGuard) delPeer(hash string) error {
+	if err := v.loadConfig(); err != nil {
+		return err
+	}
+
+	for i, p := range v.PeersSec {
+		if strings.Contains(p.PublicKey, hash) {
+			fmt.Println("Delete the following node:")
+			fmt.Printf("%v\n", p)
+			v.PeersSec = append(v.PeersSec[:i], v.PeersSec[i+1:]...)
+			break
+		}
+	}
+
+	if err := v.saveConfig(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (v *WireGuard) loadConfig() error {
+	rawIface := config.Iface("wg.iface")
+	if err := mapstructure.Decode(rawIface, &v.IfaceSec); err != nil {
+		return err
+	}
+	rawPeers := config.Peers("wg.peers")
+	if err := mapstructure.Decode(rawPeers, &v.PeersSec); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (v *WireGuard) saveConfig() error {
+	iface := map[string]interface{} {
+		"ListenPort": v.IfaceSec.ListenPort,
+		"Address":    v.IfaceSec.Address,
+		"PrivateKey": v.IfaceSec.PrivateKey,
+		"LocalEth":   v.IfaceSec.LocalEth,
+	}
+	config.SubmitIface("wg.iface", iface)
+	peers := []interface{}{}
+	for _, p := range v.PeersSec {
+		peer := map[string]string {
+			"PublicKey":  p.PublicKey,
+			"AllowedIPs": p.AllowedIps,
+		}
+		if p.EndPointIp != "" {
+			peer["EndPointIp"] = p.EndPointIp
+			peer["EndPointPort"] = p.EndPointPort
+		}
+		peers = append(peers, peer)
+	}
+	config.SubmitPeers("wg.peers", peers)
+	return nil
+}
+
+func (v *WireGuard) dumpConfig(path string) error {
+	context := ""
+
+	context += "[Interface]\n"
+	ifaceRp := map[string]string {
+		"RWTH_PORT":    v.IfaceSec.ListenPort,
+		"RWTH_CIDR":    v.IfaceSec.Address,
+		"RWTH_PRV_KEY": v.IfaceSec.PrivateKey,
+		"RWTH_ETH":     v.IfaceSec.LocalEth,
+	}
+	if v.IfaceSec.ListenPort != "" {
+		if ifaceTextS, err := utils.MakeText(configServerInterface, ifaceRp); err != nil {
+			return err
+		} else {
+			context += ifaceTextS
+		}
+	}
+	if ifaceTextC, err := utils.MakeText(configClientInterface, ifaceRp); err != nil {
+		return err
+	} else {
+		context += ifaceTextC
+	}
+
+	// dump Peer Section
+	for _, p := range v.PeersSec {
+		context += "[Peer]\n"
+		peerRp := map[string]string {
+			"RWTH_PUB_KEY":   p.PublicKey,
+			"RWTH_CIDR":      p.AllowedIps,
+			"RWTH_SERVER_IP": p.EndPointIp,
+			"RWTH_PORT":      p.EndPointPort,
+		}
+		if peerTextS, err := utils.MakeText(configServerPeer, peerRp); err != nil {
+			return err
+		} else {
+			context += peerTextS
+		}
+		if p.EndPointIp != "" {
+			if peerTextC, err := utils.MakeText(configClientPeer, peerRp); err != nil {
+				return err
+			} else {
+				context += peerTextC
+			}
+		}
+		context += "\n"
+	}
+
+	if err := ioutil.WriteFile(path, []byte(context),0600); err != nil {
+		return err
+	}
+
+	return nil
 }

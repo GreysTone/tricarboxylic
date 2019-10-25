@@ -60,11 +60,37 @@ func ReadMap(key string) map[string]interface{} {
 	return map[string]interface{}{}
 }
 
+func UpdateMap(key string, context map[string]interface{}) {
+	viper_.Set(key, context)
+	if err := viper_.WriteConfig(); err != nil {
+		panic(err)
+	}
+}
+
+func ReadArray(key string) []interface{} {
+	if viper_.IsSet(key) {
+		log.Info("load config :: " + key)
+		if ret := viper_.Get(key); ret != nil {
+			return cast.ToSlice(ret)
+		} else {
+			return []interface{}{}
+		}
+	}
+	return []interface{}{}
+}
+
+func UpdateArray(key string, context []interface{}) {
+	viper_.Set(key, context)
+	if err := viper_.WriteConfig(); err != nil {
+		panic(err)
+	}
+}
+
 func InputAndCheck(prompt string, defaultValue string, validator func(string) bool) (string, error) {
 	var input = ""
 
 	if prompt != "" {
-		fmt.Print(prompt)
+		fmt.Print(prompt + " ")
 		if _, err := fmt.Scanln(&input); err != nil {
 			return "", err
 		}

@@ -35,3 +35,19 @@ func Backend() string {
 		return defaultBackend
 	}
 }
+
+func Iface(backendSpec string) map[string]interface{} {
+	return utils.ReadMap(backendSpec)
+}
+
+func SubmitIface(backendSpec string, ctx map[string]interface{}) {
+	utils.UpdateMap(backendSpec, ctx)
+}
+
+func Peers(backendSpec string) []interface{} {
+	return utils.ReadArray(backendSpec)
+}
+
+func SubmitPeers(backendSpec string, ctx []interface{}) {
+	utils.UpdateArray(backendSpec, ctx)
+}

@@ -10,11 +10,11 @@ type VpnBackend interface {
 
 	Server(map[string]string) error
 	AddNode(map[string]string) error
-	//RemoveNode(string) error
+	DelNode(map[string]string) error
 
 	Client(map[string]string) error
 	Connect(map[string]string) error
-	//Disconnect(map[string]string) error
+	Disconnect(map[string]string) error
 
 	preflight() error
 	upIface(i string) error
