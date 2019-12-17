@@ -11,22 +11,31 @@ gover=$(shell go version)
 
 LDFLAG=-ldflags '-X "$(repo)/config.buildVersion=$(ver)" -X "$(repo)/config.buildTime=$(time)" -X "$(repo)/config.buildHash=$(hash)" -X "$(repo)/config.goVersion=$(gover)"'
 
-.PHONY: linux-amd64 linux-arm64 windows-amd64 darwin-amd64
+.PHONY: cli-nix-amd64 cli-nix-arm64 dmn-nix-amd64 dmn-nix-arm64
 
-linux-amd64: main.go
+golang-proto:
+	go version
+	go get -u github.com/golang/protobuf/{proto,protoc-gen-go}
+	go get -u google.golang.org/grpc
+	cd rpc; protoc --go_out=plugins=grpc:. *.proto; cd -
+
+cli-nix-amd64: main-cli.go
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAG) $(LDFLAG) -o $(OBJ)-$@ $<
-	# mv $(OBJ)-$@ bin
-	# docker build -t $(PROJ)-$@:$(ver) .
-	# rm bin
 
-linux-arm64: main.go
+cli-nix-arm64: main-cli.go
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAG) $(LDFLAG) -o $(OBJ)-$@ $<
+
+dmn-nix-amd64: main-dmn.go
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAG) $(LDFLAG) -o $(OBJ)-$@ $<
+
+dmn-nix-arm64: main-dmn.go
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAG) $(LDFLAG) -o $(OBJ)-$@ $<
+
+#windows-amd64: main.go
+#	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAG) $(LDFLAG) -o $(OBJ)-$@ $<
 	# mv $(OBJ)-$@ bin
 	# docker build -t $(PROJ)-$@:$(ver) .
 	# rm bin
 
-windows-amd64: main.go
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAG) $(LDFLAG) -o $(OBJ)-$@ $<
-
-darwin-amd64: main.go
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build $(GOFLAG) $(LDFLAG) -o $(OBJ)-$@ $<
+#darwin-amd64: main.go
+#	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build $(GOFLAG) $(LDFLAG) -o $(OBJ)-$@ $<

@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package rpc;
+
+service Tricarb {
+  rpc Status(Request) returns (Reply) {}
+  rpc Version(Request) returns (Reply) {}
+
+  rpc SetMode(ConfigRequest) returns (Reply) {}
+  rpc SetCIDR(ConfigRequest) returns (Reply) {}
+  rpc SetPort(ConfigRequest) returns (Reply) {}
+  rpc SetNetIC(ConfigRequest) returns (Reply) {}
+
+  rpc ServerStart(Request) returns (Reply) {}
+  rpc ServerStop(Request) returns (Reply) {}
+  rpc ClientAttach(ServerInfo) returns (Reply) {}
+  rpc ServerAttach(PeerInfo) returns (AttachReply) {}
+  rpc ClientDetach(ServerInfo) returns (Reply) {}
+  rpc ServerDetach(PeerInfo) returns (DetachReply) {}
+}
+
+message Request {
+  string client = 1;
+}
+
+message Reply {
+  uint32 code = 1;
+  string msg = 2;
+}
+
+message ConfigRequest {
+  string config = 1;
+}
+
+message PeerInfo {
+  string accessCode = 1;
+  string peerPublicKey = 2;
+}
+
+message ServerInfo {
+  string host = 1;
+  string port = 2;
+  string accessCode = 3;
+}
+
+message AttachReply {
+  Reply status = 1;
+  string assignedCIDR = 2;
+  string srvPublicKey = 3;
+  string srvListenPort = 4;
+}
+
+message DetachReply {
+  Reply status = 1;
+  string peerPublicKey = 2;
+}
+
